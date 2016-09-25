@@ -1,0 +1,85 @@
+#!/usr/bin/env python
+"""
+DNS syncronization script for alfonsimeri.net.
+to accomplish the following:
+    1. Update TTL
+    2. Modify A records from current AWS ip to the flat's ip
+"""
+import boto3
+import requests
+
+def get_current_ip():
+    """
+    Returns the current external IP
+    set in the router
+    """
+    return requests.get('https://myexternalip.com/raw').text.strip()
+
+def get_current_zone(client, zone_id):
+    """
+    Returns list of current hosted zone for
+    configured amazon account
+    """
+    return client.get_hosted_zone(
+        Id=zone_id
+    )['HostedZone']
+
+def get_current_records(client, record_id):
+    """
+    Returns list of Records for given HostedZoneId
+    """
+    return client.list_resource_record_sets(
+        HostedZoneId=record_id,
+    )['ResourceRecordSets']
+
+def get_aws_ip(records):
+    """
+    Filters only A records from Record Set
+    """
+    for record in records:
+        if record['Type'] == 'A':
+            return record['ResourceRecords'][0]['Value']
+
+def modify_record(client, zone_name, zone_id, new_ip, ttl=600):
+    """
+    Modifies a given resource record set for
+    HostedZoneId
+    """
+    client.change_resource_record_sets(
+        HostedZoneId=zone_id,
+        ChangeBatch={
+            'Comment': 'Modification by the Dynamic DNS script',
+            'Changes': [
+                {
+                    'Action': 'UPSERT',
+                    'ResourceRecordSet': {
+                        'TTL': ttl,
+                        'Name': zone_name,
+                        'Type': 'A',
+                        'ResourceRecords': [
+                            {
+                                'Value': new_ip
+                            },
+                        ]
+                    }
+                },
+            ]
+        }
+    )
+
+if __name__ == '__main__':
+
+    # Setup Route 53 Client
+    client = boto3.client('route53')
+
+    # Get all the information for the Hosted Zone: alfonsimeri.net
+    zone       = get_current_zone(client, 'Z100PX2II2FFFH')
+    records    = get_current_records(client, zone['Id'])
+    aws_ip     = get_aws_ip(records)
+    current_ip = get_current_ip()
+
+    if aws_ip and current_ip and aws_ip == current_ip:
+        print '* No need to update the Hosted Zone for: {}'.format(zone['Name'])
+    else:
+        print " * Updating Hosted Zone one for: {}".format(zone['Name'])
+        modify_record(client, zone['Name'], zone['Id'], current_ip)
